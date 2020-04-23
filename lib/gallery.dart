@@ -5,8 +5,8 @@ import 'dart:ui' as ui;
 import 'package:esys_flutter_share/esys_flutter_share.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_camera/video_preview.dart';
+import 'package:flutter_camera/constants.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 
 class Gallery extends StatefulWidget {
   @override
@@ -190,8 +190,7 @@ class _GalleryState extends State<Gallery> {
   }
 
   Future<List<FileSystemEntity>> _getAllImages() async {
-    final Directory extDir = await getApplicationDocumentsDirectory();
-    final String dirPath = '${extDir.path}/media';
+    final String dirPath = await Constants.getMediaStorage();
     final myDir = Directory(dirPath);
     List<FileSystemEntity> _images;
     _images = await myDir.list(recursive: true, followLinks: false).toList();

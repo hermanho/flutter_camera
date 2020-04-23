@@ -3,11 +3,12 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_camera/constants.dart';
 import 'package:flutter_camera/gallery.dart';
 import 'package:flutter_camera/video_timer.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 import 'package:thumbnails/thumbnails.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({Key key}) : super(key: key);
@@ -27,6 +28,7 @@ class CameraScreenState extends State<CameraScreen>
   bool _isBurstModePhoto = false;
   final _timerKey = GlobalKey<VideoTimerState>();
   ResolutionPreset resolutionPreset = ResolutionPreset.medium;
+  String _videoPath;
 
   @override
   void initState() {
@@ -117,11 +119,10 @@ class CameraScreenState extends State<CameraScreen>
                 },
               ),
             ),
-            Positioned(
+          Positioned(
               left: 60,
               top: 54.0,
-              child: Text(serializeResolutionPreset(resolutionPreset))
-            )
+              child: Text(serializeResolutionPreset(resolutionPreset)))
         ],
       ),
       bottomNavigationBar: _buildBottomNavigationBar(),
@@ -241,8 +242,7 @@ class CameraScreenState extends State<CameraScreen>
   }
 
   Future<FileSystemEntity> getLastImage() async {
-    final Directory extDir = await getApplicationDocumentsDirectory();
-    final String dirPath = '${extDir.path}/media';
+    final String dirPath = await Constants.getMediaThumbnailStorage();
     final myDir = Directory(dirPath);
     final dirExist = await myDir.exists();
     if (!dirExist) {
@@ -313,13 +313,23 @@ class CameraScreenState extends State<CameraScreen>
         _isTakingPhoto = true;
       });
       SystemSound.play(SystemSoundType.click);
-      final Directory extDir = await getApplicationDocumentsDirectory();
-      final String dirPath = '${extDir.path}/media';
+      final String dirPath = await Constants.getMediaStorage();
       await Directory(dirPath).create(recursive: true);
       final String filePath = '$dirPath/${_timestamp()}.jpeg';
       print('path: $filePath');
       try {
         await _controller.takePicture(filePath);
+
+        final String dirThumbPath = await Constants.getMediaThumbnailStorage();
+        await Directory(dirThumbPath).create(recursive: true);
+        final String fileThumbPath = '$dirThumbPath/${_timestamp()}.jpeg';
+        await FlutterImageCompress.compressAndGetFile(
+          filePath,
+          fileThumbPath,
+          minWidth: 480,
+          minHeight: 360,
+          quality: 50,
+        );
       } on CameraException catch (e) {
         print('Error: ${e.code}\nError Message: ${e.description}');
       } finally {
@@ -340,11 +350,10 @@ class CameraScreenState extends State<CameraScreen>
     });
     _timerKey.currentState.startTimer();
 
-    final Directory extDir = await getApplicationDocumentsDirectory();
-    final String dirPath = '${extDir.path}/media';
+    final String dirPath = await Constants.getMediaStorage();
+
     await Directory(dirPath).create(recursive: true);
     final String filePath = '$dirPath/${_timestamp()}.mp4';
-
     if (_controller.value.isRecordingVideo) {
       // A recording is already started, do nothing.
       return null;
@@ -353,6 +362,9 @@ class CameraScreenState extends State<CameraScreen>
     try {
 //      videoPath = filePath;
       await _controller.startVideoRecording(filePath);
+      setState(() {
+        _videoPath = filePath;
+      });
     } on CameraException catch (e) {
       _showCameraException(e);
       return null;
@@ -371,6 +383,17 @@ class CameraScreenState extends State<CameraScreen>
 
     try {
       await _controller.stopVideoRecording();
+      String thumb = await Thumbnails.getThumbnail(
+          videoFile: _videoPath, imageType: ThumbFormat.PNG, quality: 30);
+      String filename = path.basenameWithoutExtension(_videoPath);
+
+      final String dirThumbPath = await Constants.getMediaThumbnailStorage();
+      await Directory(dirThumbPath).create(recursive: true);
+      final String fileThumbPath = '$dirThumbPath/$filename.jpeg';
+      await File(thumb).rename(fileThumbPath);
+      setState(() {
+        _videoPath = null;
+      });
     } on CameraException catch (e) {
       _showCameraException(e);
       return null;
