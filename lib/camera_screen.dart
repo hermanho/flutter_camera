@@ -23,7 +23,10 @@ class CameraScreenState extends State<CameraScreen>
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _isRecordingMode = false;
   bool _isRecording = false;
+  bool _isTakingPhoto = false;
+  bool _isBurstModePhoto = false;
   final _timerKey = GlobalKey<VideoTimerState>();
+  ResolutionPreset resolutionPreset = ResolutionPreset.medium;
 
   @override
   void initState() {
@@ -33,8 +36,7 @@ class CameraScreenState extends State<CameraScreen>
 
   Future<void> _initCamera() async {
     _cameras = await availableCameras();
-    _controller = CameraController(_cameras[0], ResolutionPreset.medium);
-    _controller.initialize().then((_) {
+    await _initalCamera(_cameras[0]).then((_) {
       if (!mounted) {
         return;
       }
@@ -97,10 +99,42 @@ class CameraScreenState extends State<CameraScreen>
                 key: _timerKey,
               ),
             )
+          else
+            Positioned(
+              left: 60,
+              top: 24.0,
+              child: PopupMenuButton<String>(
+                onSelected: choiceAction,
+                itemBuilder: (BuildContext context) {
+                  return ResolutionPreset.values.map((ResolutionPreset r) {
+                    return PopupMenuItem<String>(
+                      value: serializeResolutionPreset(r),
+                      child: Text(
+                        serializeResolutionPreset(r),
+                      ),
+                    );
+                  }).toList();
+                },
+              ),
+            ),
+            Positioned(
+              left: 60,
+              top: 54.0,
+              child: Text(serializeResolutionPreset(resolutionPreset))
+            )
         ],
       ),
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
+  }
+
+  Future choiceAction(String choice) async {
+    final r = ResolutionPreset.values.firstWhere((e) =>
+        e.toString().split('.')[1].toUpperCase() == choice.toUpperCase());
+    setState(() {
+      resolutionPreset = r;
+    });
+    await _initalCamera(_controller.description);
   }
 
   Widget _buildCameraPreview() {
@@ -138,12 +172,14 @@ class CameraScreenState extends State<CameraScreen>
                 );
               }
               return GestureDetector(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => Gallery(),
-                  ),
-                ),
+                onTap: _isTakingPhoto
+                    ? null
+                    : () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => Gallery(),
+                          ),
+                        ),
                 child: Container(
                   width: 40.0,
                   height: 40.0,
@@ -161,15 +197,12 @@ class CameraScreenState extends State<CameraScreen>
           CircleAvatar(
             backgroundColor: Colors.white,
             radius: 28.0,
-            child: IconButton(
-              icon: Icon(
-                (_isRecordingMode)
-                    ? (_isRecording) ? Icons.stop : Icons.videocam
-                    : Icons.camera_alt,
-                size: 28.0,
-                color: (_isRecording) ? Colors.red : Colors.black,
-              ),
-              onPressed: () {
+            child: GestureDetector(
+              onLongPressUp: _endBurstModePhoto2,
+              onLongPress: _beginBurstModePhoto2,
+              // onTapUp: _endBurstModePhoto,
+              // onTapDown: _beginBurstModePhoto,
+              onTap: () {
                 if (!_isRecordingMode) {
                   _captureImage();
                 } else {
@@ -180,6 +213,13 @@ class CameraScreenState extends State<CameraScreen>
                   }
                 }
               },
+              child: Icon(
+                (_isRecordingMode)
+                    ? (_isRecording) ? Icons.stop : Icons.videocam
+                    : Icons.camera_alt,
+                size: 28.0,
+                color: (_isRecording) ? Colors.red : Colors.black,
+              ),
             ),
           ),
           IconButton(
@@ -187,11 +227,13 @@ class CameraScreenState extends State<CameraScreen>
               (_isRecordingMode) ? Icons.camera_alt : Icons.videocam,
               color: Colors.white,
             ),
-            onPressed: () {
-              setState(() {
-                _isRecordingMode = !_isRecordingMode;
-              });
-            },
+            onPressed: _isTakingPhoto
+                ? null
+                : () {
+                    setState(() {
+                      _isRecordingMode = !_isRecordingMode;
+                    });
+                  },
           ),
         ],
       ),
@@ -202,11 +244,21 @@ class CameraScreenState extends State<CameraScreen>
     final Directory extDir = await getApplicationDocumentsDirectory();
     final String dirPath = '${extDir.path}/media';
     final myDir = Directory(dirPath);
+    final dirExist = await myDir.exists();
+    if (!dirExist) {
+      await myDir.create();
+    }
+
     List<FileSystemEntity> _images;
     _images = myDir.listSync(recursive: true, followLinks: false);
     _images.sort((a, b) {
       return b.path.compareTo(a.path);
     });
+
+    if (_images.length == 0) {
+      return null;
+    }
+
     var lastFile = _images[0];
     var extension = path.extension(lastFile.path);
     if (extension == '.jpeg') {
@@ -224,7 +276,14 @@ class CameraScreenState extends State<CameraScreen>
     if (_controller != null) {
       await _controller.dispose();
     }
-    _controller = CameraController(cameraDescription, ResolutionPreset.medium);
+    await _initalCamera(cameraDescription);
+  }
+
+  Future<void> _initalCamera(CameraDescription cameraDescription) async {
+    if (_controller != null) {
+      await _controller.dispose();
+    }
+    _controller = CameraController(cameraDescription, resolutionPreset);
     _controller.addListener(() {
       if (mounted) setState(() {});
       if (_controller.value.hasError) {
@@ -246,14 +305,28 @@ class CameraScreenState extends State<CameraScreen>
   void _captureImage() async {
     print('_captureImage');
     if (_controller.value.isInitialized) {
+      if (_controller.value.isTakingPicture) {
+        // A capture is already pending, do nothing.
+        return null;
+      }
+      setState(() {
+        _isTakingPhoto = true;
+      });
       SystemSound.play(SystemSoundType.click);
       final Directory extDir = await getApplicationDocumentsDirectory();
       final String dirPath = '${extDir.path}/media';
       await Directory(dirPath).create(recursive: true);
       final String filePath = '$dirPath/${_timestamp()}.jpeg';
       print('path: $filePath');
-      await _controller.takePicture(filePath);
-      setState(() {});
+      try {
+        await _controller.takePicture(filePath);
+      } on CameraException catch (e) {
+        print('Error: ${e.code}\nError Message: ${e.description}');
+      } finally {
+        setState(() {
+          _isTakingPhoto = false;
+        });
+      }
     }
   }
 
@@ -302,6 +375,42 @@ class CameraScreenState extends State<CameraScreen>
       _showCameraException(e);
       return null;
     }
+  }
+
+  Future _beginBurstModePhoto(TapDownDetails d) async {
+    if (!_isRecordingMode) {
+      setState(() {
+        _isBurstModePhoto = true;
+      });
+      while (_isBurstModePhoto) {
+        _captureImage();
+        await new Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
+  }
+
+  void _endBurstModePhoto(dynamic d) async {
+    setState(() {
+      _isBurstModePhoto = false;
+    });
+  }
+
+  Future _beginBurstModePhoto2() async {
+    if (!_isRecordingMode) {
+      setState(() {
+        _isBurstModePhoto = true;
+      });
+      while (_isBurstModePhoto) {
+        _captureImage();
+        await new Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
+  }
+
+  void _endBurstModePhoto2() async {
+    setState(() {
+      _isBurstModePhoto = false;
+    });
   }
 
   String _timestamp() => DateTime.now().millisecondsSinceEpoch.toString();
